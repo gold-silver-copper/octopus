@@ -1,8 +1,32 @@
+use csv::ReaderBuilder;
+use serde::Deserialize;
 use std::{
     env,
     fs::File,
     io::{self, Write},
 };
+
+type ClientID = u16;
+type TransactionID = u32;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TransactionType {
+    Deposit,
+    Withdrawal,
+    Dispute,
+    Resolve,
+    Chargeback,
+}
+
+#[derive(Debug, Deserialize)]
+struct Transaction {
+    #[serde(rename = "type")]
+    tx_type: TransactionType,
+    client: ClientID,
+    tx: TransactionID,
+    amount: Option<f64>, // Optional because not all transaction types include amount
+}
 
 fn main() {
     // Get the input file path from the first command-line argument

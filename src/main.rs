@@ -28,13 +28,26 @@ struct Transaction {
     amount: Option<f64>, // Optional because not all transaction types include amount
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // MAKE SURE U LOCK AND OUTPUT ON STDOUT
+    // Write header to stdout
+    //  let stdout = io::stdout();
+    // let mut handle = stdout.lock();
+
     // Get the input file path from the first command-line argument
     let args: Vec<String> = env::args().collect();
-    let input_path = args.get(1).unwrap();
-    println!("{}", input_path);
+    if args.len() != 2 {
+        eprintln!("Requires exactly one command line argument. Example: 'cargo run -- test.csv' ");
+        std::process::exit(1);
+    }
 
-    // Write header to stdout
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let path = &args[1];
+    let file = File::open(path)?;
+    let mut rdr = ReaderBuilder::new().trim(csv::Trim::All).from_reader(file);
+
+    for result in rdr.deserialize() {
+        let record: Transaction = result?;
+        println!("{:?}", record);
+    }
+    Ok(())
 }

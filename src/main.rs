@@ -35,6 +35,11 @@ struct TransactionRecord {
     transaction: Transaction,
     is_disputed: bool,
 }
+#[derive(Debug, Default)]
+struct Database {
+    transaction_map: TransactionMap,
+    account_map: AccountMap,
+}
 
 type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 

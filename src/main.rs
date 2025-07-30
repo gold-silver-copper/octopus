@@ -1,5 +1,6 @@
 use csv::ReaderBuilder;
-use serde::Deserialize;
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     fs::File,
@@ -25,7 +26,54 @@ struct Transaction {
     tx_type: TransactionType,
     client: ClientID,
     tx: TransactionID,
-    amount: Option<f64>, // Optional because not all transaction types include amount
+    amount: Option<Decimal>, // Optional because not all transaction types include amount
+}
+
+#[derive(Debug, Serialize)]
+struct Account {
+    available: Decimal,
+    held: Decimal,
+    locked: bool,
+}
+
+impl Account {
+    fn new() -> Self {
+        Account {
+            available: Decimal::ZERO,
+            held: Decimal::ZERO,
+            locked: false,
+        }
+    }
+
+    fn deposit(&mut self, amount: Decimal) {
+        self.available += amount;
+    }
+
+    fn withdraw(&mut self, amount: Decimal) {
+        if self.locked || self.available < amount {
+            return;
+        }
+        self.available -= amount;
+    }
+
+    fn dispute(&mut self, amount: Decimal) {
+        self.available -= amount;
+        self.held += amount;
+    }
+
+    fn resolve(&mut self, amount: Decimal) {
+        self.held -= amount;
+        self.available += amount;
+    }
+
+    fn chargeback(&mut self, amount: Decimal) {
+        self.held -= amount;
+
+        self.locked = true;
+    }
+    fn get_total(&self) -> Decimal {
+        self.available + self.held
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

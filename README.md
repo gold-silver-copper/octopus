@@ -6,3 +6,8 @@
 
 
 I hope that my extensive use of AI is not off putting, I am trying to be completely honest about the process. I believe that I would have been able to solve the tech assessment even without using AI, but it is a convenient time-saving tool in my programming toolbox.
+
+
+-Handle disputing a failed withdrawal
+-Handle cases where the dispute,resolve,or chargeback amount is more than is available/held
+-Are deposits,chargebacks, and disputes allowed on a locked account?

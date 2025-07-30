@@ -36,23 +36,9 @@ struct TransactionRecord {
     is_disputed: bool,
 }
 
-struct TransactionMap(HashMap<TransactionID, TransactionRecord>);
-impl TransactionMap {
-    fn new() -> TransactionMap {
-        TransactionMap(HashMap::new())
-    }
-}
+type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 
-struct AccountMap(HashMap<ClientID, Account>);
-
-impl AccountMap {
-    fn get_or_create_acc(&mut self, cid: &ClientID) -> &mut Account {
-        self.0.entry(cid.clone()).or_insert_with(Account::new)
-    }
-    fn new() -> AccountMap {
-        AccountMap(HashMap::new())
-    }
-}
+type AccountMap = HashMap<ClientID, Account>;
 
 #[derive(Debug, Serialize)]
 struct Account {
@@ -102,11 +88,6 @@ impl Account {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // MAKE SURE U LOCK AND OUTPUT ON STDOUT
-    // Write header to stdout
-    //  let stdout = io::stdout();
-    // let mut handle = stdout.lock();
-
     // Get the input file path from the first command-line argument
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -123,14 +104,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for result in rdr.deserialize() {
         let transaction: Transaction = result?;
-        let account = account_map.get_or_create_acc(&transaction.client);
+        let account = account_map
+            .entry(transaction.client)
+            .or_insert_with(Account::new);
         println!("{:?}", transaction);
 
         match transaction.tx_type {
             TransactionType::Deposit => {
                 if let Some(amount) = transaction.amount {
                     account.deposit(amount);
-                    transaction_map.0.insert(
+                    transaction_map.insert(
                         transaction.tx,
                         TransactionRecord {
                             transaction,
@@ -150,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             TransactionType::Dispute => {
-                if let Some(record) = transaction_map.0.get_mut(&transaction.tx) {
+                if let Some(record) = transaction_map.get_mut(&transaction.tx) {
                     if record.transaction.client == transaction.client && !record.is_disputed {
                         if let Some(amount) = record.transaction.amount {
                             account.dispute(amount);
@@ -161,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             TransactionType::Resolve => {
-                if let Some(record) = transaction_map.0.get_mut(&transaction.tx) {
+                if let Some(record) = transaction_map.get_mut(&transaction.tx) {
                     if record.transaction.client == transaction.client && record.is_disputed {
                         if let Some(amount) = record.transaction.amount {
                             account.resolve(amount);
@@ -172,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             TransactionType::Chargeback => {
-                if let Some(record) = transaction_map.0.get_mut(&transaction.tx) {
+                if let Some(record) = transaction_map.get_mut(&transaction.tx) {
                     if record.transaction.client == transaction.client && record.is_disputed {
                         if let Some(amount) = record.transaction.amount {
                             account.chargeback(amount);
@@ -185,7 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&["client", "available", "held", "total", "locked"])?;
-    for (client_id, acc) in account_map.0.iter() {
+    for (client_id, acc) in account_map.iter() {
         wtr.write_record(&[
             client_id.to_string(),
             acc.available.to_string(),

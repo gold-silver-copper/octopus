@@ -4,13 +4,15 @@
 
 3. I got curious and asked the AI if it had seen similar questions before and it said yes and offered to show me a full solution. Curiousity got the best of me and I said yes. The solution it gave me didn't completely work but had nice helper functions and program structure, it had also incorporated my previous contributions. It also used the Decimal crate instead of floats, which I was planning on researching since the instructions mentioned a decimal accuracy to 4 digits.
 
-4. I spent some time incorporating the AI code into my project, optimizing and adjusting as needed, as well as creating other structs that I wanted such as the AccountMap. At some point I had a small double mut borrow error, I asked AI to fix it and it suggested using the entry+or_insert_with function on Hashmap, which I liked and incorporated because it was cleaner than my solution.
+4. I spent some time incorporating the AI code into my project, optimizing and adjusting as needed, as well as creating other newtypes that I wanted such as the AccountMap. At some point I had a small double mut borrow error, I asked AI to fix it and it suggested using the entry+or_insert_with function on Hashmap, which I liked and incorporated because it was cleaner than my solution.
 
 5. Once I had written the rest of the code I wanted to, I used AI to populate my  match transaction.tx_type {} statement, which it did quite well. It also generated the final csv output code unprompted.
 
 6. Went through the code cleaning and optimizing it, adding comments. Then used AI to write unit tests.
 
-7. Used AI to turn all if let blocks into match statements for better error catching
+7. Used AI to turn all if let blocks into match statements for better error catching. Used AI to add eprintln everywhere it was needed.
+
+8. Moved loop out of main into a separate function. Cleaned up main in general.
 
 I hope that my extensive use of AI is not off putting, I am trying to be completely honest about the process. I believe that I would have been able to solve the tech assessment even without using AI, but it is a convenient time-saving tool in my programming toolbox.
 

@@ -81,10 +81,11 @@ type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 type AccountMap = HashMap<ClientID, Account>;
 
 impl Database {
-    fn handle_amount_transaction<F>(&mut self, transaction: &Transaction, action: F)
-    where
-        F: Fn(&mut Account, Decimal) -> AccountResult,
-    {
+    fn handle_amount_transaction(
+        &mut self,
+        transaction: &Transaction,
+        action: impl Fn(&mut Account, Decimal) -> AccountResult,
+    ) {
         let account = self
             .account_map
             .entry(transaction.client)
@@ -121,17 +122,15 @@ impl Database {
             );
         }
     }
-    fn handle_dispute_like<F>(
+    fn handle_dispute_like(
         &mut self,
         transaction: &Transaction,
 
         condition: impl Fn(&TransactionRecord) -> bool,
-        action: F,
+        action: impl Fn(&mut Account, Decimal) -> AccountResult,
 
         new_disputed_state: bool,
-    ) where
-        F: Fn(&mut Account, Decimal) -> AccountResult,
-    {
+    ) {
         let account = self
             .account_map
             .entry(transaction.client)

@@ -81,12 +81,20 @@ struct Database {
 type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 type AccountMap = HashMap<ClientID, Account>;
 
+#[derive(Debug)]
+pub enum TransactionError {
+    Locked,
+    InsufficientFunds,
+}
+pub type TransactionResult = Result<(), TransactionError>;
+
 impl Database {
     fn handle_amount_transaction(
         &mut self,
         transaction: &Transaction,
         action: impl Fn(&mut Account, Decimal) -> AccountResult,
-    ) {
+    ) -> TransactionResult {
+        //Get or create new account
         let account = self
             .account_map
             .entry(transaction.client)

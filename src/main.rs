@@ -25,12 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut db = Database::default();
 
-    for result in rdr.deserialize() {
-        // Turn csv entry into rust struct for manipulation
-        let transaction: Transaction = result?;
-        // Process the transaction, save it in the transaction map if it is a deposit or withdrawal.
-        db.process(transaction);
+    for result in rdr.deserialize::<Transaction>() {
+        match result {
+            Ok(tx) => db.process(tx),
+            Err(e) => eprintln!("Failed to deserialize transaction: {}", e),
+        }
     }
+
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&["client", "available", "held", "total", "locked"])?;
     for (client_id, acc) in db.account_map.iter() {
@@ -132,10 +133,8 @@ impl Database {
     fn handle_dispute_like(
         &mut self,
         transaction: &Transaction,
-
         condition: impl Fn(&TransactionRecord) -> bool,
         action: impl Fn(&mut Account, Decimal) -> AccountResult,
-
         new_disputed_state: bool,
     ) {
         let account = self
@@ -527,5 +526,84 @@ mod tests {
         acc.deposit(dec!(10.0));
         acc.dispute(dec!(4.0));
         assert_eq!(acc.get_total(), dec!(10.0));
+    }
+    #[test]
+    fn test_withdrawal_missing_amount_is_ignored() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(50.00)));
+        db.process(Transaction {
+            tx_type: TransactionType::Withdrawal,
+            client: 1,
+            tx: 2,
+            amount: None,
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(50.00)); // unchanged
+    }
+
+    #[test]
+    fn test_chargeback_without_dispute_does_nothing() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Chargeback,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(100.0));
+        assert_eq!(acc.held, dec!(0.0));
+        assert_eq!(acc.locked, false);
+    }
+    #[test]
+    fn test_resolve_non_disputed_does_nothing() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Resolve,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(100.0));
+        assert_eq!(acc.held, dec!(0.0));
+    }
+    #[test]
+    fn test_double_dispute_does_nothing() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(setup_dispute_transaction(1, 1));
+        db.process(setup_dispute_transaction(1, 1)); // again
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.held, dec!(100.0));
+        assert_eq!(acc.available, dec!(0.0));
+    }
+    #[test]
+    fn test_dispute_wrong_client_id() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(setup_dispute_transaction(1, 2)); // wrong client ID
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.held, dec!(0.0)); // should not be disputed
+    }
+
+    #[test]
+    fn test_duplicate_deposit_is_ignored() {
+        let mut db = Database::default();
+        let tx = setup_deposit_transaction(1, 1, dec!(100.00));
+        db.process(tx.clone());
+        db.process(tx); // duplicate tx_id
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(100.00)); // second deposit ignored
     }
 }

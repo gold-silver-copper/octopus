@@ -31,8 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(()) => continue,
                 Err(err) => {
                     eprintln!(
-                        " {:#?} Transaction {:#?} failed with error: {:#?}",
-                        &transaction.tx_type, &transaction.tx, err
+                        " {:#?} Transaction {}, for Client {}, failed with error: {:#?}",
+                        &transaction.tx_type, &transaction.tx, &transaction.client, err
                     )
                 }
             },
@@ -88,6 +88,14 @@ struct Database {
 }
 type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 type AccountMap = HashMap<ClientID, Account>;
+trait AccountAccess {
+    fn get_or_create_new_acc(&mut self, cid: ClientID) -> &mut Account;
+}
+impl AccountAccess for AccountMap {
+    fn get_or_create_new_acc(&mut self, cid: ClientID) -> &mut Account {
+        self.entry(cid).or_insert_with(Account::new)
+    }
+}
 
 #[derive(Debug)]
 pub enum TransactionError {
@@ -106,11 +114,6 @@ impl Database {
         transaction: &Transaction,
         action: impl Fn(&mut Account, Decimal) -> AccountResult,
     ) -> TransactionResult {
-        //Get or create new account
-        let account = self
-            .account_map
-            .entry(transaction.client)
-            .or_insert_with(Account::new);
         match transaction.amount {
             Some(amount) => {
                 if amount <= Decimal::ZERO {
@@ -118,6 +121,7 @@ impl Database {
                 } else if self.transaction_map.contains_key(&transaction.tx) {
                     Err(TransactionError::Duplicate)
                 } else {
+                    let account = self.account_map.get_or_create_new_acc(transaction.client);
                     match action(account, amount) {
                         Ok(()) => {
                             self.transaction_map.insert(
@@ -143,10 +147,6 @@ impl Database {
         action: impl Fn(&mut Account, Decimal) -> AccountResult,
         new_disputed_state: bool,
     ) -> TransactionResult {
-        let account = self
-            .account_map
-            .entry(transaction.client)
-            .or_insert_with(Account::new);
         match self.transaction_map.get_mut(&transaction.tx) {
             Some(record)
                 if record.transaction.client == transaction.client
@@ -154,13 +154,16 @@ impl Database {
                     && condition(record) =>
             {
                 match record.transaction.amount {
-                    Some(amount) => match action(account, amount) {
-                        Ok(()) => {
-                            record.is_disputed = new_disputed_state;
-                            Ok(())
+                    Some(amount) => {
+                        let account = self.account_map.get_or_create_new_acc(transaction.client);
+                        match action(account, amount) {
+                            Ok(()) => {
+                                record.is_disputed = new_disputed_state;
+                                Ok(())
+                            }
+                            Err(err) => Err(TransactionError::AccountError(err)),
                         }
-                        Err(err) => Err(TransactionError::AccountError(err)),
-                    },
+                    }
                     None => Err(TransactionError::MissingAmount),
                 }
             }

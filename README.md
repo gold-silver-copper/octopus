@@ -2,7 +2,7 @@ Assumptions: When an account is locked, ALL transactions are blocked, including 
 
 # Correctness, Safety, and Performance
 
-Striving for correctness by utilizing the typesystem (newtypes for all uses of u16,u32,hashmaps,etc), using match statements instead of if-else to guarantee handling of all cases, verification against test data sets (test.csv & expected.csv). CSV types are cast to Rust types for extra type checking (Transaction struct). Errors are logged to stderr. Regression prevented by the use of unit tests.
+Striving for correctness by utilizing the typesystem (type alias for all uses of u16,u32,hashmaps,etc), using match statements instead of if-else to guarantee handling of all cases, verification against test data sets (test.csv & expected.csv). CSV types are cast to Rust types for extra type checking (Transaction struct). Errors are logged to stderr. Regression prevented by the use of unit tests.
 
 The rust csv reader does not load the whole csv file into memory at once, instead it reads line by line using a buffer. From the csv documentation: Note that the CSV reader is buffered automatically, so you should not wrap rdr in a buffered reader like io::BufReader.
 ( https://docs.rs/csv/latest/csv/struct.ReaderBuilder.html )

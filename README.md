@@ -1,4 +1,4 @@
-Assumptions: When an account is locked, ALL transactions are blocked, including withdrawals.
+Assumptions: When an account is locked, ALL transactions are blocked, including withdrawals and disputes.
 
 # Correctness, Safety, and Performance
 

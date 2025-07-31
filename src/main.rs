@@ -91,6 +91,13 @@ impl Database {
             .entry(transaction.client)
             .or_insert_with(Account::new);
         if let Some(amount) = transaction.amount {
+            if amount < Decimal::ZERO {
+                eprintln!(
+                    "Amount cannot be negative: transaction ID {} ",
+                    transaction.tx
+                );
+                return;
+            }
             if self.transaction_map.contains_key(&transaction.tx) {
                 eprintln!(
                     "Duplicate {:#?} transaction ID {}: skipping",

@@ -34,6 +34,8 @@ For the accounts, total is not tracked, only held and available are tracked, tot
 
 10. Created AccountError and AccountResult with the help of AI, fixed bug related to adding unsuccesful deposits to the database.
 
+11. After noticing a lot of code duplication in my solution, I used AI to deduplicate by using a general function with closures.
+
 
 -Handle disputing a failed withdrawal (AI says: Withdrawals are final by design — you can't freeze or reverse money that's already left. In real world requires separate legal processes)
 -Handle cases where the dispute,resolve,or chargeback amount is more than is available/held

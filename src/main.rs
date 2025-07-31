@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 type ClientID = u16;
 type TransactionID = u32;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 enum TransactionType {
     Deposit,
@@ -59,7 +59,7 @@ enum TransactionType {
     Resolve,
     Chargeback,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Transaction {
     #[serde(rename = "type")]
     tx_type: TransactionType,
@@ -81,177 +81,123 @@ type TransactionMap = HashMap<TransactionID, TransactionRecord>;
 type AccountMap = HashMap<ClientID, Account>;
 
 impl Database {
-    fn process(&mut self, transaction: Transaction) {
-        //Get an account reference by client_id. If account does not exist, create a new one and return reference to new account.
+    fn handle_amount_transaction<F>(&mut self, transaction: &Transaction, action: F)
+    where
+        F: Fn(&mut Account, Decimal) -> AccountResult,
+    {
         let account = self
             .account_map
             .entry(transaction.client)
             .or_insert_with(Account::new);
+        if let Some(amount) = transaction.amount {
+            if self.transaction_map.contains_key(&transaction.tx) {
+                eprintln!(
+                    "Duplicate {:#?} transaction ID {}: skipping",
+                    transaction.tx_type, transaction.tx
+                );
+                return;
+            }
+            match action(account, amount) {
+                Ok(()) => {
+                    self.transaction_map.insert(
+                        transaction.tx,
+                        TransactionRecord {
+                            transaction: transaction.clone(),
+                            is_disputed: false,
+                        },
+                    );
+                }
+                Err(err) => {
+                    eprintln!(
+                        "{:#?} failed for client {} tx {}: {:?}",
+                        transaction.tx_type, transaction.client, transaction.tx, err
+                    );
+                }
+            }
+        } else {
+            eprintln!(
+                "{:#?} transaction {} missing amount",
+                transaction.tx_type, transaction.tx
+            );
+        }
+    }
+    fn handle_dispute_like<F>(
+        &mut self,
+        transaction: &Transaction,
 
+        condition: impl Fn(&TransactionRecord) -> bool,
+        action: F,
+
+        new_disputed_state: bool,
+    ) where
+        F: Fn(&mut Account, Decimal) -> AccountResult,
+    {
+        let account = self
+            .account_map
+            .entry(transaction.client)
+            .or_insert_with(Account::new);
+        match self.transaction_map.get_mut(&transaction.tx) {
+            Some(record)
+                if record.transaction.client == transaction.client && condition(record) =>
+            {
+                if let Some(amount) = record.transaction.amount {
+                    match action(account, amount) {
+                        Ok(()) => record.is_disputed = new_disputed_state,
+                        Err(err) => eprintln!(
+                            "{:#?} failed for client {} tx {}: {:?}",
+                            transaction.tx_type, transaction.client, transaction.tx, err
+                        ),
+                    }
+                } else {
+                    eprintln!(
+                        "{:#?} transaction {} missing amount",
+                        transaction.tx_type, transaction.tx
+                    );
+                }
+            }
+            Some(_) => eprintln!(
+                "{:#?} transaction {} has client mismatch or invalid dispute state",
+                transaction.tx_type, transaction.tx
+            ),
+            None => eprintln!(
+                "{:#?} transaction {} not found",
+                transaction.tx_type, transaction.tx
+            ),
+        }
+    }
+
+    fn process(&mut self, transaction: Transaction) {
         match transaction.tx_type {
-            TransactionType::Deposit => match transaction.amount {
-                Some(amount) => {
-                    if self.transaction_map.contains_key(&transaction.tx) {
-                        eprintln!("Duplicate transaction ID {}: skipping", transaction.tx);
-                    } else {
-                        match account.deposit(amount) {
-                            Ok(()) => {
-                                self.transaction_map.insert(
-                                    transaction.tx,
-                                    TransactionRecord {
-                                        transaction,
-                                        is_disputed: false,
-                                    },
-                                );
-                            }
-                            Err(err) => {
-                                eprintln!(
-                                    "Deposit failed for client {} tx {}: {:?}",
-                                    transaction.client, transaction.tx, err
-                                );
-                            }
-                        }
-                    }
-                }
-                None => {
-                    eprintln!("Deposit transaction {} missing amount", transaction.tx);
-                }
-            },
-
-            TransactionType::Withdrawal => match transaction.amount {
-                Some(amount) => {
-                    if self.transaction_map.contains_key(&transaction.tx) {
-                        eprintln!(
-                            "Duplicate withdrawal transaction ID {}: skipping",
-                            transaction.tx
-                        );
-                    } else {
-                        match account.withdraw(amount) {
-                            Ok(()) => {
-                                self.transaction_map.insert(
-                                    transaction.tx,
-                                    TransactionRecord {
-                                        transaction,
-                                        is_disputed: false,
-                                    },
-                                );
-                            }
-                            Err(err) => {
-                                eprintln!(
-                                    "Withdrawal failed for client {} tx {}: {:?}",
-                                    transaction.client, transaction.tx, err
-                                );
-                            }
-                        }
-                    }
-                }
-                None => {
-                    eprintln!("Withdraw transaction {} missing amount", transaction.tx);
-                }
-            },
-
-            //Here we make sure that the transaction and dispute client is the same, and that the transaction is not already disputed.
-            TransactionType::Dispute => match self.transaction_map.get_mut(&transaction.tx) {
-                Some(record)
-                    if record.transaction.client == transaction.client && !record.is_disputed =>
-                {
-                    match record.transaction.amount {
-                        Some(amount) => match account.dispute(amount) {
-                            Ok(()) => {
-                                record.is_disputed = true;
-                            }
-                            Err(err) => {
-                                eprintln!(
-                                    "Dispute failed for client {} tx {}: {:?}",
-                                    transaction.client, transaction.tx, err
-                                );
-                            }
-                        },
-                        None => {
-                            eprintln!("Dispute transaction {} missing amount", transaction.tx);
-                        }
-                    }
-                }
-                Some(_) => {
-                    eprintln!(
-                        "Dispute transaction {} has client mismatch or is already disputed",
-                        transaction.tx
-                    );
-                }
-                None => {
-                    eprintln!("Dispute transaction {} not found", transaction.tx);
-                }
-            },
-
-            TransactionType::Resolve => match self.transaction_map.get_mut(&transaction.tx) {
-                Some(record)
-                    if record.transaction.client == transaction.client && record.is_disputed =>
-                {
-                    match record.transaction.amount {
-                        Some(amount) => match account.resolve(amount) {
-                            Ok(()) => {
-                                record.is_disputed = false;
-                            }
-                            Err(err) => {
-                                eprintln!(
-                                    "Resolve failed for client {} tx {}: {:?}",
-                                    transaction.client, transaction.tx, err
-                                );
-                            }
-                        },
-                        None => {
-                            eprintln!("Resolve transaction {} missing amount", transaction.tx);
-                        }
-                    }
-                }
-                Some(_) => {
-                    eprintln!(
-                        "Resolve transaction {} has client mismatch or is not under dispute",
-                        transaction.tx
-                    );
-                }
-                None => {
-                    eprintln!("Resolve transaction {} not found", transaction.tx);
-                }
-            },
-
-            TransactionType::Chargeback => match self.transaction_map.get_mut(&transaction.tx) {
-                Some(record)
-                    if record.transaction.client == transaction.client && record.is_disputed =>
-                {
-                    match record.transaction.amount {
-                        Some(amount) => match account.chargeback(amount) {
-                            Ok(()) => {
-                                record.is_disputed = false;
-                            }
-                            Err(err) => {
-                                eprintln!(
-                                    "Chargeback failed for client {} tx {}: {:?}",
-                                    transaction.client, transaction.tx, err
-                                );
-                            }
-                        },
-                        None => {
-                            eprintln!(
-                                "Chargeback failed: transaction {} has no amount",
-                                transaction.tx
-                            );
-                        }
-                    }
-                }
-                Some(_) => {
-                    eprintln!(
-                        "Chargeback failed: transaction {} is not under dispute or has client mismatch",
-                        transaction.tx
-                    );
-                }
-                None => {
-                    eprintln!(
-                        "Chargeback failed: transaction {} not found",
-                        transaction.tx
-                    );
-                }
-            },
+            TransactionType::Deposit => {
+                self.handle_amount_transaction(&transaction, Account::deposit);
+            }
+            TransactionType::Withdrawal => {
+                self.handle_amount_transaction(&transaction, Account::withdraw);
+            }
+            TransactionType::Dispute => {
+                self.handle_dispute_like(
+                    &transaction,
+                    |record| !record.is_disputed,
+                    Account::dispute,
+                    true,
+                );
+            }
+            TransactionType::Resolve => {
+                self.handle_dispute_like(
+                    &transaction,
+                    |record| record.is_disputed,
+                    Account::resolve,
+                    false,
+                );
+            }
+            TransactionType::Chargeback => {
+                self.handle_dispute_like(
+                    &transaction,
+                    |record| record.is_disputed,
+                    Account::chargeback,
+                    false,
+                );
+            }
         }
     }
 }

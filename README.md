@@ -1,5 +1,6 @@
-*Assumptions* I made: When an account is locked, ALL transactions are blocked, including withdrawals.
+Assumptions: When an account is locked, ALL transactions are blocked, including withdrawals.
 
+# Correctness, Safety, and Performance
 
 Striving for correctness by utilizing the typesystem (newtypes for all uses of u16,u32,hashmaps,etc), using match statements instead of if-else to guarantee handling of all cases, verification against test data sets (test.csv). CSV types are cast to Rust types for extra type checking (Transaction struct). Errors are being handled by logging to stderr. Regression prevented by the use of unit tests.
 
@@ -12,7 +13,7 @@ Rust's borrow checker is helpful here for making sure that we are not mutating t
 
 For the accounts, total is not tracked, only held and available are tracked, total is calculated through a function call. This helps lower memory usage in the database, and prevent synchronization issues (accidentally modifying held or available without modifying total).
 
-
+# AI Disclosure
 
 1. It's been a while since I did anything CLI related so I used AI to generate me skeleton structure of a program that accepts command line arguments. My first guess would have been to use the 'clap' library which I was familiar with, but AI pushed me to use 'std::env::args' instead, since it is zero dependency and sufficient for this task.
 
@@ -34,8 +35,9 @@ For the accounts, total is not tracked, only held and available are tracked, tot
 
 10. Created AccountError and AccountResult with the help of AI, fixed bug related to adding unsuccesful deposits to the database.
 
-11. After noticing a lot of code duplication in my solution, I used AI to deduplicate by using a general function with closures.
+11. After noticing a lot of code duplication in my solution, I used AI to deduplicate by generating functions that utilize closures.
 
+# Random Notes
 
 -Handle disputing a failed withdrawal (AI says: Withdrawals are final by design — you can't freeze or reverse money that's already left. In real world requires separate legal processes)
 -Handle cases where the dispute,resolve,or chargeback amount is more than is available/held

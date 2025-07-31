@@ -83,8 +83,12 @@ type AccountMap = HashMap<ClientID, Account>;
 
 #[derive(Debug)]
 pub enum TransactionError {
-    Locked,
-    InsufficientFunds,
+    NegativeAmount,
+    Duplicate,
+    AccountError(AccountError),
+    MissingAmount,
+    InvalidDispute,
+    ReferenceNotFound,
 }
 pub type TransactionResult = Result<(), TransactionError>;
 
@@ -99,43 +103,29 @@ impl Database {
             .account_map
             .entry(transaction.client)
             .or_insert_with(Account::new);
-        if let Some(amount) = transaction.amount {
-            if amount < Decimal::ZERO {
-                eprintln!(
-                    "Amount cannot be negative: transaction ID {} ",
-                    transaction.tx
-                );
-                return;
-            }
-            if self.transaction_map.contains_key(&transaction.tx) {
-                eprintln!(
-                    "Duplicate {:#?} transaction ID {}: skipping",
-                    transaction.tx_type, transaction.tx
-                );
-                return;
-            }
-            match action(account, amount) {
-                Ok(()) => {
-                    self.transaction_map.insert(
-                        transaction.tx,
-                        TransactionRecord {
-                            transaction: transaction.clone(),
-                            is_disputed: false,
-                        },
-                    );
-                }
-                Err(err) => {
-                    eprintln!(
-                        "{:#?} failed for client {} tx {}: {:?}",
-                        transaction.tx_type, transaction.client, transaction.tx, err
-                    );
+        match transaction.amount {
+            Some(amount) => {
+                if amount <= Decimal::ZERO {
+                    Err(TransactionError::NegativeAmount)
+                } else if self.transaction_map.contains_key(&transaction.tx) {
+                    Err(TransactionError::Duplicate)
+                } else {
+                    match action(account, amount) {
+                        Ok(()) => {
+                            self.transaction_map.insert(
+                                transaction.tx,
+                                TransactionRecord {
+                                    transaction: transaction.clone(),
+                                    is_disputed: false,
+                                },
+                            );
+                            Ok(())
+                        }
+                        Err(err) => Err(TransactionError::AccountError(err)),
+                    }
                 }
             }
-        } else {
-            eprintln!(
-                "{:#?} transaction {} missing amount",
-                transaction.tx_type, transaction.tx
-            );
+            None => Err(TransactionError::MissingAmount),
         }
     }
     fn handle_dispute_like(
@@ -144,7 +134,7 @@ impl Database {
         condition: impl Fn(&TransactionRecord) -> bool,
         action: impl Fn(&mut Account, Decimal) -> AccountResult,
         new_disputed_state: bool,
-    ) {
+    ) -> TransactionResult {
         let account = self
             .account_map
             .entry(transaction.client)
@@ -155,64 +145,52 @@ impl Database {
                     && record.transaction.tx_type == TransactionType::Deposit
                     && condition(record) =>
             {
-                if let Some(amount) = record.transaction.amount {
-                    match action(account, amount) {
-                        Ok(()) => record.is_disputed = new_disputed_state,
-                        Err(err) => eprintln!(
-                            "{:#?} failed for client {} tx {}: {:?}",
-                            transaction.tx_type, transaction.client, transaction.tx, err
-                        ),
-                    }
-                } else {
-                    eprintln!(
-                        "{:#?} transaction {} missing amount",
-                        transaction.tx_type, transaction.tx
-                    );
+                match record.transaction.amount {
+                    Some(amount) => match action(account, amount) {
+                        Ok(()) => {
+                            record.is_disputed = new_disputed_state;
+                            Ok(())
+                        }
+                        Err(err) => Err(TransactionError::AccountError(err)),
+                    },
+                    None => Err(TransactionError::MissingAmount),
                 }
             }
-            Some(_) => eprintln!(
-                "{:#?} transaction {} has client mismatch, invalid dispute state, or is not a deposit",
-                transaction.tx_type, transaction.tx
-            ),
-            None => eprintln!(
-                "{:#?} transaction {} not found",
-                transaction.tx_type, transaction.tx
-            ),
+            Some(_) => {
+                return Err(TransactionError::InvalidDispute);
+            }
+            None => {
+                return Err(TransactionError::ReferenceNotFound);
+            }
         }
     }
 
-    fn process(&mut self, transaction: Transaction) {
+    fn process(&mut self, transaction: Transaction) -> TransactionResult {
         match transaction.tx_type {
             TransactionType::Deposit => {
-                self.handle_amount_transaction(&transaction, Account::deposit);
+                self.handle_amount_transaction(&transaction, Account::deposit)
             }
             TransactionType::Withdrawal => {
-                self.handle_amount_transaction(&transaction, Account::withdraw);
+                self.handle_amount_transaction(&transaction, Account::withdraw)
             }
-            TransactionType::Dispute => {
-                self.handle_dispute_like(
-                    &transaction,
-                    |record| !record.is_disputed,
-                    Account::dispute,
-                    true,
-                );
-            }
-            TransactionType::Resolve => {
-                self.handle_dispute_like(
-                    &transaction,
-                    |record| record.is_disputed,
-                    Account::resolve,
-                    false,
-                );
-            }
-            TransactionType::Chargeback => {
-                self.handle_dispute_like(
-                    &transaction,
-                    |record| record.is_disputed,
-                    Account::chargeback,
-                    false,
-                );
-            }
+            TransactionType::Dispute => self.handle_dispute_like(
+                &transaction,
+                |record| !record.is_disputed,
+                Account::dispute,
+                true,
+            ),
+            TransactionType::Resolve => self.handle_dispute_like(
+                &transaction,
+                |record| record.is_disputed,
+                Account::resolve,
+                false,
+            ),
+            TransactionType::Chargeback => self.handle_dispute_like(
+                &transaction,
+                |record| record.is_disputed,
+                Account::chargeback,
+                false,
+            ),
         }
     }
 }

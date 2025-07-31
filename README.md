@@ -1,4 +1,4 @@
-Assumptions I made: When an account is locked, ALL transactions are blocked, including withdrawals.
+*Assumptions* I made: When an account is locked, ALL transactions are blocked, including withdrawals.
 
 
 Striving for correctness by utilizing the typesystem (newtypes for all uses of u16,u32,hashmaps,etc), using match statements instead of if-else to guarantee handling of all cases, verification against test data sets (test.csv). CSV types are cast to Rust types for extra type checking (Transaction struct). Errors are being handled by logging to stderr. Regression prevented by the use of unit tests.

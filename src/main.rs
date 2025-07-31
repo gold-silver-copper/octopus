@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for result in rdr.deserialize() {
         // Turn csv entry into rust struct for manipulation
         let transaction: Transaction = result?;
-        // Process the transaction, save it in the transaction map if it is a deposit.
+        // Process the transaction, save it in the transaction map if it is a deposit or withdrawal.
         db.process(transaction);
     }
     let mut wtr = csv::Writer::from_writer(io::stdout());
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 type ClientID = u16;
 type TransactionID = u32;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum TransactionType {
     Deposit,
@@ -138,7 +138,9 @@ impl Database {
             .or_insert_with(Account::new);
         match self.transaction_map.get_mut(&transaction.tx) {
             Some(record)
-                if record.transaction.client == transaction.client && condition(record) =>
+                if record.transaction.client == transaction.client
+                    && record.transaction.tx_type == TransactionType::Deposit
+                    && condition(record) =>
             {
                 if let Some(amount) = record.transaction.amount {
                     match action(account, amount) {
@@ -156,7 +158,7 @@ impl Database {
                 }
             }
             Some(_) => eprintln!(
-                "{:#?} transaction {} has client mismatch or invalid dispute state",
+                "{:#?} transaction {} has client mismatch, invalid dispute state, or is not a deposit",
                 transaction.tx_type, transaction.tx
             ),
             None => eprintln!(

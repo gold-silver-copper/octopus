@@ -27,7 +27,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for result in rdr.deserialize::<Transaction>() {
         match result {
-            Ok(tx) => db.process(tx),
+            Ok(transaction) => match db.process(transaction) {
+                Ok(()) => continue,
+                Err(err) => {
+                    eprintln!(
+                        " {:#?} Transaction {:#?} failed with error: {:#?}",
+                        &transaction.tx_type, &transaction.tx, err
+                    )
+                }
+            },
             Err(e) => eprintln!("Failed to deserialize transaction: {}", e),
         }
     }

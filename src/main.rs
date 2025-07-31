@@ -6,8 +6,46 @@ use std::{
     collections::HashMap,
     env,
     fs::File,
-    io::{self, Write},
+    io::{self},
 };
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Get the input file path from the first command-line argument
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Requires exactly one command line argument. Example: 'cargo run -- test.csv' ");
+        std::process::exit(1);
+    }
+
+    // We get the second arg here because the first arg is always the destination folder for compilation
+    let path = &args[1];
+    let file = File::open(path)?;
+    //trims whitespace and header
+    let mut rdr = ReaderBuilder::new().trim(csv::Trim::All).from_reader(file);
+
+    let mut db = Database::default();
+
+    for result in rdr.deserialize() {
+        // Turn csv entry into rust struct for manipulation
+        let transaction: Transaction = result?;
+        // Process the transaction, save it in the transaction map if it is a deposit.
+        db.process(transaction);
+    }
+    let mut wtr = csv::Writer::from_writer(io::stdout());
+    wtr.write_record(&["client", "available", "held", "total", "locked"])?;
+    for (client_id, acc) in db.account_map.iter() {
+        wtr.write_record(&[
+            client_id.to_string(),
+            acc.available.to_string(),
+            acc.held.to_string(),
+            acc.get_total().to_string(),
+            acc.locked.to_string(),
+        ])?;
+    }
+    wtr.flush()?;
+
+    Ok(())
+}
 
 type ClientID = u16;
 type TransactionID = u32;
@@ -21,7 +59,6 @@ enum TransactionType {
     Resolve,
     Chargeback,
 }
-
 #[derive(Debug, Deserialize)]
 struct Transaction {
     #[serde(rename = "type")]
@@ -40,10 +77,184 @@ struct Database {
     transaction_map: TransactionMap,
     account_map: AccountMap,
 }
-
 type TransactionMap = HashMap<TransactionID, TransactionRecord>;
-
 type AccountMap = HashMap<ClientID, Account>;
+
+impl Database {
+    fn process(&mut self, transaction: Transaction) {
+        //Get an account reference by client_id. If account does not exist, create a new one and return reference to new account.
+        let account = self
+            .account_map
+            .entry(transaction.client)
+            .or_insert_with(Account::new);
+
+        match transaction.tx_type {
+            TransactionType::Deposit => match transaction.amount {
+                Some(amount) => {
+                    if self.transaction_map.contains_key(&transaction.tx) {
+                        eprintln!("Duplicate transaction ID {}: skipping", transaction.tx);
+                    } else {
+                        match account.deposit(amount) {
+                            Ok(()) => {
+                                self.transaction_map.insert(
+                                    transaction.tx,
+                                    TransactionRecord {
+                                        transaction,
+                                        is_disputed: false,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "Deposit failed for client {} tx {}: {:?}",
+                                    transaction.client, transaction.tx, err
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    eprintln!("Deposit transaction {} missing amount", transaction.tx);
+                }
+            },
+
+            TransactionType::Withdrawal => match transaction.amount {
+                Some(amount) => {
+                    if self.transaction_map.contains_key(&transaction.tx) {
+                        eprintln!(
+                            "Duplicate withdrawal transaction ID {}: skipping",
+                            transaction.tx
+                        );
+                    } else {
+                        match account.withdraw(amount) {
+                            Ok(()) => {
+                                self.transaction_map.insert(
+                                    transaction.tx,
+                                    TransactionRecord {
+                                        transaction,
+                                        is_disputed: false,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "Withdrawal failed for client {} tx {}: {:?}",
+                                    transaction.client, transaction.tx, err
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    eprintln!("Withdraw transaction {} missing amount", transaction.tx);
+                }
+            },
+
+            //Here we make sure that the transaction and dispute client is the same, and that the transaction is not already disputed.
+            TransactionType::Dispute => match self.transaction_map.get_mut(&transaction.tx) {
+                Some(record)
+                    if record.transaction.client == transaction.client && !record.is_disputed =>
+                {
+                    match record.transaction.amount {
+                        Some(amount) => match account.dispute(amount) {
+                            Ok(()) => {
+                                record.is_disputed = true;
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "Dispute failed for client {} tx {}: {:?}",
+                                    transaction.client, transaction.tx, err
+                                );
+                            }
+                        },
+                        None => {
+                            eprintln!("Dispute transaction {} missing amount", transaction.tx);
+                        }
+                    }
+                }
+                Some(_) => {
+                    eprintln!(
+                        "Dispute transaction {} has client mismatch or is already disputed",
+                        transaction.tx
+                    );
+                }
+                None => {
+                    eprintln!("Dispute transaction {} not found", transaction.tx);
+                }
+            },
+
+            TransactionType::Resolve => match self.transaction_map.get_mut(&transaction.tx) {
+                Some(record)
+                    if record.transaction.client == transaction.client && record.is_disputed =>
+                {
+                    match record.transaction.amount {
+                        Some(amount) => match account.resolve(amount) {
+                            Ok(()) => {
+                                record.is_disputed = false;
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "Resolve failed for client {} tx {}: {:?}",
+                                    transaction.client, transaction.tx, err
+                                );
+                            }
+                        },
+                        None => {
+                            eprintln!("Resolve transaction {} missing amount", transaction.tx);
+                        }
+                    }
+                }
+                Some(_) => {
+                    eprintln!(
+                        "Resolve transaction {} has client mismatch or is not under dispute",
+                        transaction.tx
+                    );
+                }
+                None => {
+                    eprintln!("Resolve transaction {} not found", transaction.tx);
+                }
+            },
+
+            TransactionType::Chargeback => match self.transaction_map.get_mut(&transaction.tx) {
+                Some(record)
+                    if record.transaction.client == transaction.client && record.is_disputed =>
+                {
+                    match record.transaction.amount {
+                        Some(amount) => match account.chargeback(amount) {
+                            Ok(()) => {
+                                record.is_disputed = false;
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "Chargeback failed for client {} tx {}: {:?}",
+                                    transaction.client, transaction.tx, err
+                                );
+                            }
+                        },
+                        None => {
+                            eprintln!(
+                                "Chargeback failed: transaction {} has no amount",
+                                transaction.tx
+                            );
+                        }
+                    }
+                }
+                Some(_) => {
+                    eprintln!(
+                        "Chargeback failed: transaction {} is not under dispute or has client mismatch",
+                        transaction.tx
+                    );
+                }
+                None => {
+                    eprintln!(
+                        "Chargeback failed: transaction {} not found",
+                        transaction.tx
+                    );
+                }
+            },
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct Account {
@@ -51,6 +262,13 @@ struct Account {
     held: Decimal,
     locked: bool,
 }
+
+#[derive(Debug)]
+pub enum AccountError {
+    Locked,
+    InsufficientFunds,
+}
+pub type AccountResult = Result<(), AccountError>;
 
 impl Account {
     fn new() -> Self {
@@ -61,78 +279,59 @@ impl Account {
         }
     }
 
-    fn deposit(&mut self, amount: Decimal) {
+    fn deposit(&mut self, amount: Decimal) -> AccountResult {
         if self.locked {
-            eprintln!("Attempted deposit of {} on locked account", amount);
-            return;
+            return Err(AccountError::Locked);
         }
         self.available += amount;
+        Ok(())
     }
 
-    fn withdraw(&mut self, amount: Decimal) {
+    fn withdraw(&mut self, amount: Decimal) -> AccountResult {
         if self.locked {
-            eprintln!("Attempted withdrawal of {} on locked account", amount);
-            return;
+            return Err(AccountError::Locked);
         }
         if self.available < amount {
-            eprintln!(
-                "Insufficient funds: attempted withdrawal of {}, available is {}",
-                amount, self.available
-            );
-            return;
+            return Err(AccountError::InsufficientFunds);
         }
         self.available -= amount;
+        Ok(())
     }
 
-    fn dispute(&mut self, amount: Decimal) {
+    fn dispute(&mut self, amount: Decimal) -> AccountResult {
         if self.locked {
-            eprintln!("Attempted dispute of {} on locked account", amount);
-            return;
+            return Err(AccountError::Locked);
         }
         if self.available < amount {
-            eprintln!(
-                "Dispute failed: amount {} exceeds available funds {}",
-                amount, self.available
-            );
-            return;
+            return Err(AccountError::InsufficientFunds);
         }
         self.available -= amount;
         self.held += amount;
+        Ok(())
     }
 
-    fn resolve(&mut self, amount: Decimal) {
+    fn resolve(&mut self, amount: Decimal) -> AccountResult {
         if self.locked {
-            eprintln!("Attempted resolve of {} on locked account", amount);
-            return;
+            return Err(AccountError::Locked);
         }
         if self.held < amount {
-            eprintln!(
-                "Resolve failed: amount {} exceeds held funds {}",
-                amount, self.held
-            );
-            return;
+            return Err(AccountError::InsufficientFunds);
         }
         self.held -= amount;
         self.available += amount;
+        Ok(())
     }
 
-    fn chargeback(&mut self, amount: Decimal) {
+    fn chargeback(&mut self, amount: Decimal) -> AccountResult {
         if self.locked {
-            eprintln!(
-                "Attempted chargeback of {} on already locked account",
-                amount
-            );
-            return;
+            return Err(AccountError::Locked);
         }
         if self.held < amount {
-            eprintln!(
-                "Chargeback failed: amount {} exceeds held funds {}",
-                amount, self.held
-            );
-            return;
+            return Err(AccountError::InsufficientFunds);
         }
         self.held -= amount;
         self.locked = true;
+        Ok(())
     }
 
     fn get_total(&self) -> Decimal {
@@ -140,171 +339,166 @@ impl Account {
     }
 }
 
-fn populate_and_process(
-    account_map: &mut AccountMap,
-    transaction_map: &mut TransactionMap,
-    transaction: Transaction,
-) {
-    //Get an account reference by client_id. If account does not exist, create a new one and return reference to new account.
-    let account = account_map
-        .entry(transaction.client)
-        .or_insert_with(Account::new);
-
-    match transaction.tx_type {
-        TransactionType::Deposit => match transaction.amount {
-            Some(amount) => {
-                account.deposit(amount);
-                transaction_map.insert(
-                    transaction.tx,
-                    TransactionRecord {
-                        transaction,
-                        is_disputed: false,
-                    },
-                );
-            }
-            None => {
-                eprintln!("Deposit transaction {} missing amount", transaction.tx);
-            }
-        },
-
-        TransactionType::Withdrawal => {
-            match transaction.amount {
-                Some(amount) => {
-                    account.withdraw(amount);
-                    // We don’t store withdrawals in the transaction map
-                }
-                None => {
-                    eprintln!("Withdraw transaction {} missing amount", transaction.tx);
-                }
-            }
-        }
-
-        //Here we make sure that the transaction and dispute client is the same, and that the transaction is not already disputed.
-        TransactionType::Dispute => match transaction_map.get_mut(&transaction.tx) {
-            Some(record)
-                if record.transaction.client == transaction.client && !record.is_disputed =>
-            {
-                match record.transaction.amount {
-                    Some(amount) => {
-                        account.dispute(amount);
-                        record.is_disputed = true;
-                    }
-                    None => {
-                        eprintln!("Dispute transaction {} missing amount", transaction.tx);
-                    }
-                }
-            }
-            Some(_) => {
-                eprintln!(
-                    "Dispute transaction {} has client mismatch or is already disputed",
-                    transaction.tx
-                );
-            }
-            None => {
-                eprintln!("Dispute transaction {} not found", transaction.tx);
-            }
-        },
-
-        TransactionType::Resolve => match transaction_map.get_mut(&transaction.tx) {
-            Some(record)
-                if record.transaction.client == transaction.client && record.is_disputed =>
-            {
-                match record.transaction.amount {
-                    Some(amount) => {
-                        account.resolve(amount);
-                        record.is_disputed = false;
-                    }
-                    None => {
-                        eprintln!("Resolve transaction {} missing amount", transaction.tx);
-                    }
-                }
-            }
-            Some(_) => {
-                eprintln!(
-                    "Resolve transaction {} has client mismatch or is not under dispute",
-                    transaction.tx
-                );
-            }
-            None => {
-                eprintln!("Resolve transaction {} not found", transaction.tx);
-            }
-        },
-
-        TransactionType::Chargeback => match transaction_map.get_mut(&transaction.tx) {
-            Some(record)
-                if record.transaction.client == transaction.client && record.is_disputed =>
-            {
-                match record.transaction.amount {
-                    Some(amount) => {
-                        account.chargeback(amount);
-                        record.is_disputed = false;
-                    }
-                    None => {
-                        eprintln!(
-                            "Chargeback failed: transaction {} has no amount",
-                            transaction.tx
-                        );
-                    }
-                }
-            }
-            Some(_) => {
-                eprintln!(
-                    "Chargeback failed: transaction {} is not under dispute or has client mismatch",
-                    transaction.tx
-                );
-            }
-            None => {
-                eprintln!(
-                    "Chargeback failed: transaction {} not found",
-                    transaction.tx
-                );
-            }
-        },
-    }
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get the input file path from the first command-line argument
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Requires exactly one command line argument. Example: 'cargo run -- test.csv' ");
-        std::process::exit(1);
-    }
-
-    let path = &args[1];
-    let file = File::open(path)?;
-    //trims whitespace and header
-    let mut rdr = ReaderBuilder::new().trim(csv::Trim::All).from_reader(file);
-
-    let mut account_map = AccountMap::new();
-    let mut transaction_map = TransactionMap::new();
-
-    for result in rdr.deserialize() {
-        // Turn csv entry into rust struct for manipulation
-        let transaction: Transaction = result?;
-        // Apply the transaction to the account, save it in the transaction map if it is a deposit.
-        populate_and_process(&mut account_map, &mut transaction_map, transaction);
-    }
-    let mut wtr = csv::Writer::from_writer(io::stdout());
-    wtr.write_record(&["client", "available", "held", "total", "locked"])?;
-    for (client_id, acc) in account_map.iter() {
-        wtr.write_record(&[
-            client_id.to_string(),
-            acc.available.to_string(),
-            acc.held.to_string(),
-            acc.get_total().to_string(),
-            acc.locked.to_string(),
-        ])?;
-    }
-    wtr.flush()?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal::*;
+
+    fn setup_deposit_transaction(
+        tx: TransactionID,
+        client: ClientID,
+        amount: Decimal,
+    ) -> Transaction {
+        Transaction {
+            tx_type: TransactionType::Deposit,
+            client,
+            tx,
+            amount: Some(amount),
+        }
+    }
+
+    fn setup_dispute_transaction(tx: TransactionID, client: ClientID) -> Transaction {
+        Transaction {
+            tx_type: TransactionType::Dispute,
+            client,
+            tx,
+            amount: None,
+        }
+    }
+
+    #[test]
+    fn test_deposit_increases_available_balance() {
+        let mut db = Database::default();
+        let tx = setup_deposit_transaction(1, 1, dec!(100.00));
+        db.process(tx);
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(100.00));
+        assert_eq!(acc.held, dec!(0.00));
+        assert_eq!(acc.locked, false);
+    }
+
+    #[test]
+    fn test_withdrawal_reduces_balance() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Withdrawal,
+            client: 1,
+            tx: 2,
+            amount: Some(dec!(30.00)),
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(70.00));
+        assert_eq!(acc.get_total(), dec!(70.00));
+    }
+
+    #[test]
+    fn test_withdrawal_insufficient_funds_does_not_change_balance() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(50.00)));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Withdrawal,
+            client: 1,
+            tx: 2,
+            amount: Some(dec!(100.00)),
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(50.00)); // unchanged
+    }
+
+    #[test]
+    fn test_dispute_moves_funds_to_held() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(setup_dispute_transaction(1, 1));
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(0.00));
+        assert_eq!(acc.held, dec!(100.00));
+    }
+
+    #[test]
+    fn test_resolve_returns_held_funds_to_available() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(setup_dispute_transaction(1, 1));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Resolve,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(100.00));
+        assert_eq!(acc.held, dec!(0.00));
+    }
+
+    #[test]
+    fn test_chargeback_removes_held_funds_and_locks_account() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(setup_dispute_transaction(1, 1));
+
+        db.process(Transaction {
+            tx_type: TransactionType::Chargeback,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(0.00));
+        assert_eq!(acc.held, dec!(0.00));
+        assert_eq!(acc.locked, true);
+    }
+
+    #[test]
+    fn test_cannot_deposit_to_locked_account() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(setup_dispute_transaction(1, 1));
+        db.process(Transaction {
+            tx_type: TransactionType::Chargeback,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        db.process(setup_deposit_transaction(2, 1, dec!(50.00)));
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(0.00)); // deposit rejected
+    }
+
+    #[test]
+    fn test_cannot_withdraw_from_locked_account() {
+        let mut db = Database::default();
+        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(setup_dispute_transaction(1, 1));
+        db.process(Transaction {
+            tx_type: TransactionType::Chargeback,
+            client: 1,
+            tx: 1,
+            amount: None,
+        });
+
+        db.process(Transaction {
+            tx_type: TransactionType::Withdrawal,
+            client: 1,
+            tx: 2,
+            amount: Some(dec!(50.00)),
+        });
+
+        let acc = db.account_map.get(&1).unwrap();
+        assert_eq!(acc.available, dec!(0.00)); // withdrawal ignored
+    }
 
     #[test]
     fn test_deposit_increases_available_and_total() {

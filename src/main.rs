@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for result in rdr.deserialize::<Transaction>() {
         match result {
-            Ok(transaction) => match db.process(transaction) {
+            Ok(transaction) => match db.process(&transaction) {
                 Ok(()) => continue,
                 Err(err) => {
                     eprintln!(
@@ -173,28 +173,28 @@ impl Database {
         }
     }
 
-    fn process(&mut self, transaction: Transaction) -> TransactionResult {
+    fn process(&mut self, transaction: &Transaction) -> TransactionResult {
         match transaction.tx_type {
             TransactionType::Deposit => {
-                self.handle_amount_transaction(&transaction, Account::deposit)
+                self.handle_amount_transaction(transaction, Account::deposit)
             }
             TransactionType::Withdrawal => {
-                self.handle_amount_transaction(&transaction, Account::withdraw)
+                self.handle_amount_transaction(transaction, Account::withdraw)
             }
             TransactionType::Dispute => self.handle_dispute_like(
-                &transaction,
+                transaction,
                 |record| !record.is_disputed,
                 Account::dispute,
                 true,
             ),
             TransactionType::Resolve => self.handle_dispute_like(
-                &transaction,
+                transaction,
                 |record| record.is_disputed,
                 Account::resolve,
                 false,
             ),
             TransactionType::Chargeback => self.handle_dispute_like(
-                &transaction,
+                transaction,
                 |record| record.is_disputed,
                 Account::chargeback,
                 false,
@@ -317,7 +317,7 @@ mod tests {
     fn test_deposit_increases_available_balance() {
         let mut db = Database::default();
         let tx = setup_deposit_transaction(1, 1, dec!(100.00));
-        db.process(tx);
+        db.process(&tx);
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.available, dec!(100.00));
@@ -328,9 +328,9 @@ mod tests {
     #[test]
     fn test_withdrawal_reduces_balance() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Withdrawal,
             client: 1,
             tx: 2,
@@ -345,9 +345,9 @@ mod tests {
     #[test]
     fn test_withdrawal_insufficient_funds_does_not_change_balance() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(50.00)));
+        db.process(&setup_deposit_transaction(1, 1, dec!(50.00)));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Withdrawal,
             client: 1,
             tx: 2,
@@ -361,8 +361,8 @@ mod tests {
     #[test]
     fn test_dispute_moves_funds_to_held() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
-        db.process(setup_dispute_transaction(1, 1));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_dispute_transaction(1, 1));
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.available, dec!(0.00));
@@ -372,10 +372,10 @@ mod tests {
     #[test]
     fn test_resolve_returns_held_funds_to_available() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
-        db.process(setup_dispute_transaction(1, 1));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_dispute_transaction(1, 1));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Resolve,
             client: 1,
             tx: 1,
@@ -390,10 +390,10 @@ mod tests {
     #[test]
     fn test_chargeback_removes_held_funds_and_locks_account() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
-        db.process(setup_dispute_transaction(1, 1));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_dispute_transaction(1, 1));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Chargeback,
             client: 1,
             tx: 1,
@@ -409,16 +409,16 @@ mod tests {
     #[test]
     fn test_cannot_deposit_to_locked_account() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
-        db.process(setup_dispute_transaction(1, 1));
-        db.process(Transaction {
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_dispute_transaction(1, 1));
+        db.process(&Transaction {
             tx_type: TransactionType::Chargeback,
             client: 1,
             tx: 1,
             amount: None,
         });
 
-        db.process(setup_deposit_transaction(2, 1, dec!(50.00)));
+        db.process(&setup_deposit_transaction(2, 1, dec!(50.00)));
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.available, dec!(0.00)); // deposit rejected
@@ -427,16 +427,16 @@ mod tests {
     #[test]
     fn test_cannot_withdraw_from_locked_account() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.00)));
-        db.process(setup_dispute_transaction(1, 1));
-        db.process(Transaction {
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.00)));
+        db.process(&setup_dispute_transaction(1, 1));
+        db.process(&Transaction {
             tx_type: TransactionType::Chargeback,
             client: 1,
             tx: 1,
             amount: None,
         });
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Withdrawal,
             client: 1,
             tx: 2,
@@ -524,8 +524,8 @@ mod tests {
     #[test]
     fn test_withdrawal_missing_amount_is_ignored() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(50.00)));
-        db.process(Transaction {
+        db.process(&setup_deposit_transaction(1, 1, dec!(50.00)));
+        db.process(&Transaction {
             tx_type: TransactionType::Withdrawal,
             client: 1,
             tx: 2,
@@ -539,9 +539,9 @@ mod tests {
     #[test]
     fn test_chargeback_without_dispute_does_nothing() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.0)));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Chargeback,
             client: 1,
             tx: 1,
@@ -556,9 +556,9 @@ mod tests {
     #[test]
     fn test_resolve_non_disputed_does_nothing() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.0)));
 
-        db.process(Transaction {
+        db.process(&Transaction {
             tx_type: TransactionType::Resolve,
             client: 1,
             tx: 1,
@@ -572,9 +572,9 @@ mod tests {
     #[test]
     fn test_double_dispute_does_nothing() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
-        db.process(setup_dispute_transaction(1, 1));
-        db.process(setup_dispute_transaction(1, 1)); // again
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(&setup_dispute_transaction(1, 1));
+        db.process(&setup_dispute_transaction(1, 1)); // again
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.held, dec!(100.0));
@@ -583,8 +583,8 @@ mod tests {
     #[test]
     fn test_dispute_wrong_client_id() {
         let mut db = Database::default();
-        db.process(setup_deposit_transaction(1, 1, dec!(100.0)));
-        db.process(setup_dispute_transaction(1, 2)); // wrong client ID
+        db.process(&setup_deposit_transaction(1, 1, dec!(100.0)));
+        db.process(&setup_dispute_transaction(1, 2)); // wrong client ID
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.held, dec!(0.0)); // should not be disputed
@@ -594,8 +594,8 @@ mod tests {
     fn test_duplicate_deposit_is_ignored() {
         let mut db = Database::default();
         let tx = setup_deposit_transaction(1, 1, dec!(100.00));
-        db.process(tx.clone());
-        db.process(tx); // duplicate tx_id
+        db.process(&tx);
+        db.process(&tx); // duplicate tx_id
 
         let acc = db.account_map.get(&1).unwrap();
         assert_eq!(acc.available, dec!(100.00)); // second deposit ignored
